@@ -535,16 +535,15 @@ function renderParamEditor(stage, method) {
     const input = document.createElement('input');
     input.className = 'param-input';
     input.name = key;
-    input.type = meta.input === 'number' ? 'number' : 'text';
+    input.type = meta.input === 'color' ? 'color' : meta.input === 'number' ? 'number' : 'text';
     input.value = formatInputValue(values[key]);
     if (input.type === 'number') {
       if (meta.min != null) input.min = String(meta.min);
       if (meta.max != null) input.max = String(meta.max);
       if (meta.step != null) input.step = String(meta.step);
-    } else {
+    } else if (input.type === 'text') {
       input.spellcheck = false;
       input.autocapitalize = 'off';
-      if (meta.input === 'color') input.placeholder = '#94D3C1';
     }
 
     field.appendChild(fieldHead);
@@ -735,31 +734,11 @@ async function runPipeline() {
     toast('Upload a source image first', 'error');
     return;
   }
-  ui.runBtn.disabled = true;
-  ui.runBtnLabel.textContent = 'Processing…';
-  // micro-yield so UI updates before WASM heavy lifting
-  await new Promise((r) => requestAnimationFrame(r));
-
-  const t0 = performance.now();
-  try {
-    pipeline.runAll();
-    paintOutput();
-    refreshGallery();
-    refreshRailHighlights();
-    refreshLearningBar();
-    renderActiveStage();
-    if (classifier.ready) runInference();
-    hasRun = true;
-    const ms = Math.round(performance.now() - t0);
-    toast(`Pipeline complete · ${ms} ms`, 'ok');
-    ui.runBtnLabel.textContent = 'Re-run Pipeline';
-  } catch (err) {
-    console.error(err);
-    toast('Pipeline failed: ' + err.message, 'error');
-    ui.runBtnLabel.textContent = 'Run Pipeline';
-  } finally {
-    ui.runBtn.disabled = false;
-  }
+  await processPipelineUpdate({
+    run: () => pipeline.runAll(),
+    successMessage: (ms) => `Pipeline complete · ${ms} ms`,
+    errorPrefix: 'Pipeline failed: ',
+  });
 }
 
 function onMethodPick(stageId, methodId) {
@@ -770,7 +749,7 @@ function onMethodPick(stageId, methodId) {
   refreshRailHighlights();
 
   if (pipeline.hasSource()) {
-    rerunStageChange(stageId, `Updated ${pipeline.getStage(stageId).name}`);
+    void rerunStageChange(stageId, `Updated ${pipeline.getStage(stageId).name}`);
   }
 }
 
@@ -788,31 +767,52 @@ function onParamSave(stageId, methodId, form) {
   if (activeStageId === stageId) renderActiveStage();
 
   if (pipeline.hasSource()) {
-    rerunStageChange(stageId, `Updated ${pipeline.getStage(stageId).name} parameters`);
+    void rerunStageChange(stageId, `Updated ${pipeline.getStage(stageId).name} parameters`);
   } else {
     toast(`Saved ${pipeline.getStage(stageId).name} parameters`, 'ok');
   }
 }
 
-function rerunStageChange(stageId, successMessage) {
+async function rerunStageChange(stageId, successMessage) {
+  await processPipelineUpdate({
+    run: () => {
+      if (hasRun) {
+        pipeline.runFrom(stageId);
+        if (stageId !== 'composite') pipeline.runComposite();
+      } else {
+        pipeline.runAll();
+      }
+    },
+    successMessage,
+    errorPrefix: 'Re-run failed: ',
+  });
+}
+
+async function processPipelineUpdate({ run, successMessage, errorPrefix }) {
+  const hadRunBefore = hasRun;
+  ui.runBtn.disabled = true;
+  ui.runBtnLabel.textContent = 'Processing…';
+  await new Promise((r) => requestAnimationFrame(r));
+
+  const t0 = performance.now();
   try {
-    if (hasRun) {
-      pipeline.runFrom(stageId);
-      if (stageId !== 'composite') pipeline.runComposite();
-    } else {
-      pipeline.runAll();
-      hasRun = true;
-    }
+    run();
     paintOutput();
     refreshGallery();
     refreshRailHighlights();
     refreshLearningBar();
     renderActiveStage();
+    if (classifier.ready) runInference();
+    hasRun = true;
+    const ms = Math.round(performance.now() - t0);
+    toast(typeof successMessage === 'function' ? successMessage(ms) : successMessage, 'ok');
     ui.runBtnLabel.textContent = 'Re-run Pipeline';
-    toast(successMessage, 'ok');
   } catch (err) {
     console.error(err);
-    toast('Re-run failed: ' + err.message, 'error');
+    toast(errorPrefix + err.message, 'error');
+    ui.runBtnLabel.textContent = hadRunBefore ? 'Re-run Pipeline' : 'Run Pipeline';
+  } finally {
+    ui.runBtn.disabled = false;
   }
 }
 

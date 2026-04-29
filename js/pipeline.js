@@ -20,7 +20,7 @@
  *  branch        true when the stage's output is purely informative
  *                (no downstream stage consumes it; safe to skip if errored)
  *  methods[]     selectable algorithms — each:
- *      id, name, optimal?, rationale, formula?, params{}, run(input, cv, params) -> Mat
+ *      id, name, optimal?, rationale, formula?, params{}, run(input, cv, params, pipeline) -> Mat
  *  description   shown in the detail panel for fixed stages
  */
 
@@ -323,10 +323,23 @@ function parseRelativeExpr(expr, input, fallback) {
 
 function percentileValue(data, percentile) {
   if (!data || !data.length) return 0;
-  const sorted = Array.from(data).sort((a, b) => a - b);
   const p = clamp(Number(percentile) || 0, 0, 100);
-  const idx = Math.floor((sorted.length - 1) * (p / 100));
-  return sorted[idx];
+  const targetIndex = Math.floor((data.length - 1) * (p / 100));
+
+  if (data instanceof Uint8Array || data instanceof Uint8ClampedArray) {
+    const bins = new Uint32Array(256);
+    for (let i = 0; i < data.length; i++) bins[data[i]]++;
+
+    let cumulative = 0;
+    for (let value = 0; value < bins.length; value++) {
+      cumulative += bins[value];
+      if (cumulative > targetIndex) return value;
+    }
+    return 255;
+  }
+
+  const sorted = Array.from(data).sort((a, b) => a - b);
+  return sorted[targetIndex];
 }
 
 function hexToRgb(hex, fallback) {
